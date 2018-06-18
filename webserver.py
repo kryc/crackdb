@@ -93,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
-            self.wfile.write(MAIN_PAGE.format(', '.join(hashcracker.getAlgorithms(LOCATION))))
+            self.wfile.write(MAIN_PAGE.format(', '.join(crackdb.getAlgorithms(LOCATION))))
         elif self.path.endswith('.js'):
             self.send_response(200)
             self.send_header('Content-type', 'application/javascript')
@@ -130,8 +130,8 @@ class Handler(BaseHTTPRequestHandler):
         results = []
         for hashstr in hashes:
             # Do the crack
-            available = hashcracker.getAlgorithms(LOCATION)
-            result = hashcracker.lookup(LOCATION, binascii.unhexlify(hashstr), available)
+            available = crackdb.getAlgorithms(LOCATION)
+            result = crackdb.lookup(LOCATION, binascii.unhexlify(hashstr), available)
             algorithm, word = ('', 'UNKNOWN', ) if result == None else result
             results.append((hashstr, algorithm, word, ))
             print json.dumps(results)
@@ -146,7 +146,7 @@ LOCATION = '.'
 def startServer(location, address='0.0.0.0', port=8080):
     '''
     The main function for starting the web server
-    This is called directly from within the main hashcracker.py
+    This is called directly from within the main crackdb.py
     '''
     global LOCATION
     server = ThreadedHTTPServer((address, port), Handler)
