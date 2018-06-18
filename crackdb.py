@@ -694,6 +694,19 @@ def importnew(location, wordlists, maxsize=None, ignore=None, wordfilter=None, s
     os.unlink(newwords_file)
 
 if __name__ == '__main__':
+    def parseAlgorithms(algorithms):
+        if algorithms == None:
+            algorithms = ['sha1', 'sha256', 'md5', 'ntlm', ]
+        elif 'all' in algorithms:
+            algorithms = ALGORITHM.keys()[:]
+        else:
+            algorithms = algorithms.split(',')
+        # Validate algorithm list
+        invalid = [a for a in algorithms if a not in ALGORITHM.keys()]
+        if len( invalid ) > 0:
+            print('[!] ERROR: Unknown algorithm(s): {:s}'.format(','.join(invalid)))
+            sys.exit(-1)
+        return algorithms
 
     parser = argparse.ArgumentParser(description='Password hash cracking tool',
                                      epilog='For additional help, type an action and --help')
@@ -713,15 +726,15 @@ if __name__ == '__main__':
                                          epilog='Note: It is faster to build a database on an SSD due to the sorting')
         parser.add_argument('location', help='Location of the cracking database')
         parser.add_argument('wordlist', nargs='+', help='Wordlist to build database with (use "-" for stdin)')
-        parser.add_argument('-a', '--algorithm', nargs='+', default=['sha1', 'sha256', 'md5', 'ntlm', ], choices=ALGORITHM.keys()+['all', ], help='Specify algorithms to generate')
+        parser.add_argument('-a', '--algorithm', type=str, help='Comma separated algorithms to generate')
         parser.add_argument('-c', '--count', type=int, help='Maximum number of words to parse from wordlist')
         parser.add_argument('--max', type=int, help='Maximum word length')
         parser.add_argument('--filter', help='Regex to filter only these lines. Usually enforcing printable')
         parser.add_argument('--ignore', help='Regex to ignore. Commonly used for easily brute forceable')
         parser.add_argument('-t', '--threads', default=multiprocessing.cpu_count(), type=int, help='Number of processing threads to use')
         args = parser.parse_args(sys.argv[2:])
-        if 'all' in args.algorithm:
-            args.algorithm = ALGORITHM.keys()[:]
+        # Unpack algorithm list
+        args.algorithm = parseAlgorithms(args.algorithm)
         importwords(args.location, args.wordlist, args.max, args.ignore, args.filter, count=args.count, threads=args.threads)
     elif args.action == 'sort':
         parser = argparse.ArgumentParser(description='Sort. Sort the database files ready for lookup')
@@ -743,9 +756,11 @@ if __name__ == '__main__':
     elif args.action == 'add':
         parser = argparse.ArgumentParser(description='Add. Add an additional algorithm to the database')
         parser.add_argument('location', help='Location of the cracking database')
-        parser.add_argument('-a', '--algorithm', nargs='+', choices=ALGORITHM.keys()+['all', ], help='Specify algorithms to generate')
+        parser.add_argument('-a', '--algorithm', nargs='+', choices=ALGORITHM.keys()+['all', ], help='Comma separated algorithms to generate')
         parser.add_argument('-t', '--threads', default=multiprocessing.cpu_count(), type=int, help='Number of processing threads to use')
         args = parser.parse_args(sys.argv[2:])
+        # Unpack algorithm list
+        args.algorithm = parseAlgorithms(args.algorithm)
         importwords(args.location, threads=args.threads)
     elif args.action == 'import':
         parser = argparse.ArgumentParser(description='Import. Import new words into the existing tables',
