@@ -10,6 +10,7 @@ import gzip
 import time
 import Queue
 import signal
+import resource
 # Import our large binary file sorting library
 from binarydb import *
 import webserver
@@ -66,6 +67,7 @@ ALGORITHM = {'sha1' : algoSha1,
 EMPTYHASH = {a:ALGORITHM[a]('') for a in ALGORITHM}
 ALGOSIZES = {a:len(EMPTYHASH[a]) for a in ALGORITHM}
 EMPTYLUT = {EMPTYHASH[a]:a for a in EMPTYHASH}
+PARENT = os.getpid()
 
 def getAlgorithms(location):
     '''
@@ -283,6 +285,30 @@ class DelayedKeyboardInterrupt(object):
         # if self.signal_received:
         #   self.old_handler(*self.signal_received)
 
+def checkFileHandles(maxsize):
+    '''
+    This function will check the number of file handles available to us. More
+    handles improves cache efficiency. It saves flushing and closing handles
+    for each individual write
+    '''
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    print('[i] File handles available for caching: {:d}'.format(soft))
+    # Guess the required number of file handles. Guarantee performance up to 250. Plus ~50 for interpreter
+    guessRequired = ( len(args.algorithm) * 256 ) + ( maxsize if maxsize != None else 250 ) + 50
+    suggested = guessRequired + (1000 - guessRequired) % 1000
+    if soft > guessRequired:
+        return soft
+    else:
+        print('[!] Not enough file handles available to efficiently')
+        print('[!] build the database.')
+        print('[!] I *strongly* suggest increasing the number by running')
+        print('[!] \tulimit -n {:d}'.format( suggested ))
+        print('[!] Then running the program again')
+        if raw_input("Continue anyway? (y/n):") != 'y':
+            sys.exit(0)
+    # We always return the soft file handle limit
+    return soft
+
 def sortUnsortedFileWorker(filename):
     # We use force mmap because there will be multiple
     # files being sorted at once meaning we will likely
@@ -348,32 +374,22 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
         For common sized wordlist files (typically less than 100), we can rely on the stdlib
         cache by maintaining a list of open file handles.
         '''
-        def flushWordBuffers():
-            for width in wordBuffers:
-                with getWordlist(args.location, width, openmode='ab+', bufsize=0) as fh:
-                    fh.write(wordBuffers[width])
-                wordBuffers[width] = ''
-        def flushHashBuffers():
-            for algorithm in hashBuffers:
-                for hashindex in xrange(len(hashBuffers[algorithm])):
-                    with getHashfile(args.location, algorithm, hashindex, openmode='ab+', bufsize=0) as fh:
-                        fh.write(hashBuffers[algorithm][hashindex])
-                    hashBuffers[algorithm][hashindex] = ''
-        
+        maxHandles, hardLimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        usedHandles = 30 # stdin, out,  etc plus a couple for file reading
+        cachedHandles = {'wordlists':{}, 'hashes':{}}
+        informedUser = False
+
         # Build out initial indexes table
         file_indexes = {}
         if maxWordsize(location) != None:
             for width in xrange(1, maxWordsize(location)):
                 wordlist = getWordlist(location, width)
                 file_indexes[width] = (os.path.getsize(wordlist) / width) if os.path.isfile(wordlist) else 0
-        
-        # Initialise out write buffers
-        wordBuffers = {}
-        hashBuffers = {algorithm:['' for i in xrange(256)] for algorithm in args.algorithm}
-        cachedHandles = {w:getWordlist(args.location, w, openmode='ab+') for w in xrange(3, 100)} if wordlists != None else {}
-        blocksize = 8192
 
         while not writequeue.empty() or not wordqueue.empty() or not complete.is_set():
+            if os.getppid() != PARENT:
+                # Been reparented so exit
+                break
             try:
                 index, word, hashdict = writequeue.get(True, 1)
             except Queue.Empty:
@@ -385,17 +401,15 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
             if wordlists != None:
                 # See if we have a cached file handle for common widths. If we do, use it
                 # and allow the system to handle write buffers. If not, update our own buffers
-                if width in cachedHandles:
-                    cachedHandles[width].write(word)
+                if width not in cachedHandles['wordlists'] and usedHandles < maxHandles:
+                    cachedHandles['wordlists'][width] = getWordlist(args.location, width, openmode='ab+')
+                    usedHandles += 1
+                if width in cachedHandles['wordlists']:
+                    cachedHandles['wordlists'][width].write(word)
                 else:
-                    if width not in wordBuffers:
-                        wordBuffers[width] = ''
-                    wordBuffers[width] += word
-                    # Check if we need to flush
-                    if len(wordBuffers[width]) > blocksize:
-                        with getWordlist(args.location, width, openmode='ab+', bufsize=0) as fh:
-                            fh.write(wordBuffers[width])
-                        wordBuffers[width] = ''
+                    # Fall back to the slower technique
+                    with getWordlist(args.location, width, openmode='ab+', bufsize=0) as fh:
+                        fh.write(word)
                 # Increment the index
                 if width not in file_indexes:
                     file_indexes[width] = 0
@@ -408,20 +422,20 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
                 # width    index
                 offsetval = ((width&WIDTHMASK) << INDEXBITS) | (index & INDEXMASK)
                 hashindex = ord(hashbytes[0])
-                hashBuffers[algorithm][hashindex] += hashbytes[:HASHLEN] + struct.pack('>I', offsetval)
-                if len(hashBuffers[algorithm][hashindex]) > blocksize:
-                    with getHashfile(args.location, algorithm, hashindex, openmode='ab+', bufsize=0) as fh:
-                        fh.write(hashBuffers[algorithm][hashindex])
-                    hashBuffers[algorithm][hashindex] = ''
+                hashData = hashbytes[:HASHLEN] + struct.pack('>I', offsetval)
 
-        # Make sure we flush the remaining buffers
-        if wordlists != None:
-            for width in cachedHandles:
-                # Flush and close handles to be dilligent
-                cachedHandles[width].flush()
-                cachedHandles[width].close()
-            flushWordBuffers()
-        flushHashBuffers()
+                if (algorithm, hashindex, ) not in cachedHandles['hashes'] and usedHandles < maxHandles:
+                    cachedHandles['hashes'][(algorithm, hashindex, )] = getHashfile(args.location, algorithm, hashindex, openmode='ab+')
+                    usedHandles += 1
+                if (algorithm, hashindex, ) in cachedHandles['hashes']:
+                    cachedHandles['hashes'][(algorithm, hashindex, )].write( hashData )
+                else:
+                    # Fall back to the slower technique
+                    if not informedUser:
+                        print('[!] Out of handles! Falling back to slow technique')
+                        informedUser = True
+                    with getHashfile(args.location, algorithm, hashindex, openmode='ab+', bufsize=0) as fh:
+                        fh.write(hashData)
 
     def hashWorker(wordqueue, writequeue, complete):
         '''
@@ -433,6 +447,9 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
         # before we do a write. Additionally, the files are open for append which guarantees
         # that we will only ever write to the end of the file
         while not wordqueue.empty() or not complete.is_set():
+            if os.getppid() != PARENT:
+                # Been reparented so exit
+                break
             try:
                 word = wordqueue.get(True, 1)
             except Queue.Empty:
@@ -446,6 +463,11 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
             hashdict = {algorithm:ALGORITHM[algorithm](word) for algorithm in args.algorithm}
             job = (index, word, hashdict,)
             writequeue.put(job)
+
+    # If possible, we increase the number of available file handles
+    # to improve write efficiency. We need to do this before making
+    # folders as it requires root
+    checkFileHandles(maxsize)
 
     if threads is None:
         threads = multiprocessing.cpu_count()
@@ -695,7 +717,7 @@ def importnew(location, wordlists, maxsize=None, ignore=None, wordfilter=None, s
 
 if __name__ == '__main__':
     def parseAlgorithms(algorithms):
-        if algorithms == None:
+        if algorithms is None:
             algorithms = ['sha1', 'sha256', 'md5', 'ntlm', ]
         elif 'all' in algorithms:
             algorithms = ALGORITHM.keys()[:]
