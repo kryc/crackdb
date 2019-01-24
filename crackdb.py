@@ -51,7 +51,7 @@ def algoMd5(word):
     return hashlib.md5(word).digest()
 def algoNTLM(word):
     try: return hashlib.new('md4', word.encode('utf-16le')).digest()
-    except UnicodeDecodeError: return hashlib.new('md4', word.decode('ascii', 'ignore').encode('utf-16le')).digest()
+    except UnicodeDecodeError: return hashlib.new('md4', word.decode('utf-8', 'ignore').encode('utf-16le')).digest()
 def algoMySQL41(word):
     return hashlib.sha1(hashlib.sha1(word).digest()).digest()
 def algoMd5Md5Hex(word):
@@ -124,6 +124,15 @@ def getHashfile(location, algorithm, index, openmode=None, bufsize=-1):
     if openmode is None:
         return filepath
     return open(filepath, openmode, bufsize)
+
+def getHashFiles(location, openmode=None, bufsize=-1):
+    '''
+    Iterator that returns all of the database files in a 
+    given location
+    '''
+    for algo in getAlgorithms(location):
+        for index in xrange(256):
+            yield getHashfile(location, algo, index, openmode=openmode, bufsize=bufsize)
 
 def getUnsortedFiles(location):
     global HASHFILE_NAME, ALGORITHM
@@ -358,6 +367,46 @@ def sortDatabase(location, threads=None, count=None):
                 print('[!] Database may remain unsorted')
                 break
 
+def analyseDatabase(location):
+    '''
+    Performs an analysis of the structure and efficiency of storage
+    of the database. It will then simply print out some metrics to
+    stdout.
+    '''
+    sorted_count = 0
+    unsorted_count = 0
+    unsorted = []
+    file_count = 0
+    collisions = 0
+    collisions_nonntlm = 0
+    for fh in getHashFiles(location, openmode='rb'):
+        file_count += 1
+        if isSorted(fh, RECORDSIZE, compareRecords):
+            sorted_count += 1
+        else:
+            unsorted_count += 1
+            unsorted.append(fh.name)
+
+        lastRecord = None
+        for record in iterateRecords(fh, RECORDSIZE):
+            if lastRecord == None:
+                lastRecord = record
+            else:
+                if lastRecord[:HASHLEN] == record[:HASHLEN]:
+                    if 'ntlm' not in fh.name:
+                        collisions_nonntlm += 1
+                    collisions += 1
+                lastRecord = record
+
+    print('[ Analysis Report ]')
+    print('[+] Database Files:  {:d}'.format(file_count))
+    print('[+] Sorted Files:    {:d}'.format(sorted_count))
+    print('[+] Unsorted Files:  {:d}'.format(unsorted_count))
+    for f in unsorted:
+        print('\t[-] {:s}'.format(os.path.basename(f)))
+    print('[+] Hash Collisions: {:d}({:d})'.format(collisions_nonntlm, collisions))
+
+
 def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=None, count=None, threads=None, importmode=False):
     ''' 
     The main entry point for build, import and add.
@@ -375,6 +424,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
         cache by maintaining a list of open file handles.
         '''
         maxHandles, hardLimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        maxHandles = hardLimit
         usedHandles = 30 # stdin, out,  etc plus a couple for file reading
         cachedHandles = {'wordlists':{}, 'hashes':{}}
         informedUser = False
@@ -732,7 +782,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Password hash cracking tool',
                                      epilog='For additional help, type an action and --help')
-    parser.add_argument('action', choices=('wordlistinfo', 'build', 'sort', 'crack', 'add', 'import', 'export', 'serve',), help='Operation to perform')
+    parser.add_argument('action', choices=('wordlistinfo', 'build', 'sort', 'analyse', 'crack', 'add', 'import', 'export', 'serve',), help='Operation to perform')
     args = parser.parse_args(sys.argv[1:2])
 
     if args.action == 'wordlistinfo':
@@ -765,6 +815,11 @@ if __name__ == '__main__':
         parser.add_argument('-c', '--count', type=int, help='Maximum number of files to process')
         args = parser.parse_args(sys.argv[2:])
         sortDatabase(args.location, threads=args.threads, count=args.count)
+    elif args.action == 'analyse':
+        parser = argparse.ArgumentParser(description='Analyse. Perform an analysis of the database')
+        parser.add_argument('location', help='Location of the cracking database')
+        args = parser.parse_args(sys.argv[2:])
+        analyseDatabase(args.location)
     elif args.action == 'crack':
         parser = argparse.ArgumentParser(description='Crack. Crack password hashes')
         parser.add_argument('location', help='Location of the cracking database')

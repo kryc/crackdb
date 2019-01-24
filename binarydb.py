@@ -162,6 +162,60 @@ def sortFileQuicksort(mm, records, width, comparefn, threads=None):
 
 SORTALGORITHM = {'bubble':sortFileBubble, 'quick':sortFileQuicksort}
 
+def isSorted(handle, width, comparefn):
+    '''
+    Checks whether a database file is sorted using the width and comparison
+    functions provided. It simply applies the comparison function to each
+    record in turn and checks that the result is always positive. 
+    '''
+    fh = None
+    if isinstance(handle, str):
+        fh = open(handle, 'rb')
+    else:
+        fh = handle
+
+    fh.seek(0, os.SEEK_END)
+    filesize = fh.tell()
+    if filesize % width != 0:
+        raise Exception('Database file does not appear to be valid')
+    records = filesize / width
+    fh.seek(0, os.SEEK_SET)
+    # Read the first record
+    record1 = fh.read(width)
+    for index in xrange(1, records):
+        record2 = fh.read(width)
+        if comparefn(record1, record2) > 0:
+            if isinstance(handle, str):
+                fh.close()
+            return False
+        record1 = record2
+
+    if isinstance(handle, str):
+        fh.close()
+    return True
+
+def iterateRecords(handle, width):
+    '''
+    Iterates through the records in a database file given the supplied width
+    '''
+    fh = None
+    if isinstance(handle, str):
+        fh = open(handle, 'rb')
+    else:
+        fh = handle
+
+    fh.seek(0, os.SEEK_END)
+    filesize = fh.tell()
+    if filesize % width != 0:
+        raise Exception('Database file does not appear to be valid')
+    records = filesize / width
+    fh.seek(0, os.SEEK_SET)
+    for index in xrange(records):
+        yield fh.read(width)
+    if isinstance(handle, str):
+        fh.close()
+
+
 def sortFile(handle, width, comparefn, threads=None, algorithm=None, rename=None, forcemmap=False):
     '''
     There are several options when sorting a file, each
