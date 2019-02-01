@@ -636,7 +636,7 @@ def storeUncrackable(location, hashstr):
     with open(os.path.join(location, 'uncrackable.txt'), 'at') as fh:
         fh.write('{:s}\n'.format(hashstr))
 
-def crack(location, hashes, threads=None, uncrackable=None):
+def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
     '''
     Main entry point to the crack command line option.
     Takes the location of the database and an iterable containing
@@ -673,11 +673,12 @@ def crack(location, hashes, threads=None, uncrackable=None):
                 hashstr, hashbytes = queue.get(True, 1)
             except: continue
             if hashbytes in EMPTYHASH:
-                result = (EMPTYHASH[hashbytes], '',) 
+                result = (EMPTYHASH[hashbytes], '',)
             else:
                 result = lookup(location, hashbytes, available=available_algorithms)
-            algorithm, word = result if result != None else ('', '***UNKNOWN***',)
-            display(hashstr, word)
+            algorithm, word = result if result is not None else ('', '***UNKNOWN***',)
+            if result is not None or (result is None and not ignore):
+                display(hashstr, word)
 
 
     available_algorithms = getAlgorithms(location)
@@ -735,6 +736,7 @@ def importnew(location, wordlists, maxsize=None, ignore=None, wordfilter=None, s
         print('[!] ERROR: Database has unsorted tables.')
         print('[!]        Run sort before continuing')
         return
+    print('[+] Importing new words into database')
     # Build the temporary wordlist path
     newwords_file = os.path.join(location, '_new.txt')
     # Get our list of algorithms already built
@@ -746,17 +748,59 @@ def importnew(location, wordlists, maxsize=None, ignore=None, wordfilter=None, s
     # We have a preference for algorithm based on relative speed
     # Check preferred algo list
     checkalgorithm = None
-    for algorithm in ('md5', 'sha1', 'sha256', 'sha512',) + tuple(ALGORITHM.keys()):
+    for algorithm in ('sha1', 'sha256', 'sha512',) + tuple(ALGORITHM.keys()):
         if algorithm in availablealgorithms:
             checkalgorithm = algorithm
-    print('[+] Importing new words')
-    with open(newwords_file, 'wt') as wfh:
-        for word in readWordlists(wordlists, maxsize=maxsize, ignore=ignore, wordfilter=wordfilter, count=count):
-            hsh = ALGORITHM[checkalgorithm](word)
-            # Try the lookup
-            if lookup(location, hsh, availablealgorithms) != None:
-                continue
-            wfh.write(word + '\n')
+            break
+    print('[+] Performing lookup with {:s}'.format(checkalgorithm))
+
+    def worker(queue, complete, algorithm, fh, fd_lock):
+        while not queue.empty() or not complete.is_set():
+            try:
+                word = queue.get(True, 1)
+            except: continue
+            hashbytes = ALGORITHM[checkalgorithm](word)
+            result = lookup(location, hashbytes, available=(algorithm,))
+            if result is None:
+                with fd_lock:
+                     fh.write(word + '\n')
+
+    available_algorithms = getAlgorithms(location)
+    if threads in (None, 0, 1,):
+        with open(newwords_file, 'wt') as wfh:
+            for word in readWordlists(wordlists, maxsize=maxsize, ignore=ignore, wordfilter=wordfilter, count=count):
+                hsh = ALGORITHM[checkalgorithm](word)
+                # Try the lookup
+                if lookup(location, hsh, availablealgorithms) != None:
+                    continue
+                wfh.write(word + '\n')
+    else:
+        # Multithreaded version
+        wfh = open(newwords_file, 'wt')
+        queue = multiprocessing.Queue(1000)
+        writelock = multiprocessing.Lock()
+        complete = multiprocessing.Event()
+        workers = []
+        for i in xrange(threads):
+            p = multiprocessing.Process(target=worker, args=(queue, complete, checkalgorithm, wfh, writelock))
+            p.daemon = True
+            p.start()
+            workers.append(p)
+        try:
+            for word in readWordlists(wordlists, maxsize=maxsize, ignore=ignore, wordfilter=wordfilter, count=count):
+                queue.put(word)
+        except KeyboardInterrupt:
+            print('\r[+] Interrupted. During import')
+            # Delete temporary file?
+            return
+        finally:
+            complete.set()
+            for i in xrange(threads):
+                workers[i].join()
+        wfh.close()
+
+    sys.exit(0)
+
     print('[+] Delta wordlist built. Importing new words')
     # Mark any existing files as unsorted
     markAlgorithmsAppended(location)
@@ -827,9 +871,10 @@ if __name__ == '__main__':
         parser.add_argument('-t', '--threads', type=int, help='Number of processing threads to use')
         parser.add_argument('-d', '--debug', action='store_true', help='Output debug information')
         parser.add_argument('-a', '--archive', action='store_true', help='Archive uncracked hashes')
+        parser.add_argument('-i', '--ignore', action='store_true', help='Ignore uncrackable')
         args = parser.parse_args(sys.argv[2:])
         uncrackable = storeUncrackable if args.archive else None
-        crack(args.location, args.hash, threads=args.threads, uncrackable=uncrackable)
+        crack(args.location, args.hash, threads=args.threads, uncrackable=uncrackable, ignore=args.ignore)
     elif args.action == 'add':
         parser = argparse.ArgumentParser(description='Add. Add an additional algorithm to the database')
         parser.add_argument('location', help='Location of the cracking database')
