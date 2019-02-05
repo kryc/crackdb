@@ -627,14 +627,17 @@ def lookup(location, hashbytes, available):
                     width += MAXINDEX
     return None
 
+STORE_UNCRACKABLE_LOCK = multiprocessing.Lock()
 def storeUncrackable(location, hashstr):
     '''
     This is a handler method for dealing with uncrackable hashes.
     By default they are ignored, but they can be saved to a text file
     in the database folder
     '''
-    with open(os.path.join(location, 'uncrackable.txt'), 'at') as fh:
-        fh.write('{:s}\n'.format(hashstr))
+    global STORE_UNCRACKABLE_LOCK
+    with STORE_UNCRACKABLE_LOCK:
+        with open(os.path.join(location, 'uncrackable.txt'), 'at') as fh:
+            fh.write('{:s}\n'.format(hashstr))
 
 def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
     '''
@@ -645,11 +648,13 @@ def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
     '''
     def display(hashstr, word, matches='NA', misses='NA;'):
         # We need to aquire the print lock in case we are multithreaded
-        with PRINT_LOCK:
-            if args.debug:
-                print('{:s} {:s} [matches:{:} misses:{:}]'.format(hashstr, word, matches, misses))
-            else:
-                print('{:s} {:s}'.format(hashstr, word if word != None else '!!! HASH NOT FOUND !!!'))
+        if word is not None or (word is None and not ignore):
+            word = word if word is not None else '***UNKNOWN***'
+            with PRINT_LOCK:
+                if args.debug:
+                    print('{:s} {:s} [matches:{:} misses:{:}]'.format(hashstr, word, matches, misses))
+                else:
+                    print('{:s} {:s}'.format(hashstr, word if word != None else '!!! HASH NOT FOUND !!!'))
         # If the password has not successfully been cracked, we add
         # it to the 'uncrackable' file in the database. This seems
         # like an odd place for this but its common code for threaded
@@ -676,21 +681,23 @@ def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
                 result = (EMPTYHASH[hashbytes], '',)
             else:
                 result = lookup(location, hashbytes, available=available_algorithms)
-            algorithm, word = result if result is not None else ('', '***UNKNOWN***',)
-            if result is not None or (result is None and not ignore):
-                display(hashstr, word)
+            algorithm, word = result if result is not None else (None, None,)
+            display(hashstr, word)
 
 
     available_algorithms = getAlgorithms(location)
     if threads in (None, 0, 1,):
         # Single threaded version
         for hashstr in parseHashes(hashes):
-            hashbytes = binascii.unhexlify(hashstr)
+            try:
+                hashbytes = binascii.unhexlify(hashstr)
+            except TypeError:
+                display(hashstr, None)
             if hashbytes in EMPTYHASH:
                 result = (EMPTYHASH[hashbytes], '',)
             else:
                 result = lookup(location, hashbytes, available_algorithms)
-            algorithm, word = result if result != None else ('', '***UNKNOWN***',)
+            algorithm, word = result if result is not None else (None, None,)
             display(hashstr, word)
     else:
         # Multithreaded version
@@ -704,7 +711,11 @@ def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
             workers.append(p)
         try:
             for hashstr in parseHashes(hashes):
-                queue.put((hashstr, binascii.unhexlify(hashstr),))
+                try:
+                    hashbytes = binascii.unhexlify(hashstr)
+                except TypeError:
+                    display(hashstr, None)
+                queue.put((hashstr, hashbytes,))
         except KeyboardInterrupt:
             print('\r[+] Interrupted. During crack')
             return
