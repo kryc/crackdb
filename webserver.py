@@ -1,7 +1,7 @@
-from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
-from SocketServer import ThreadingMixIn
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from cgi import parse_header, parse_multipart
-from urlparse import parse_qs
+from urllib.parse import parse_qs
 import json
 import binascii
 import crackdb
@@ -134,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
             result = crackdb.lookup(LOCATION, binascii.unhexlify(hashstr), available)
             algorithm, word = ('', 'UNKNOWN', ) if result == None else result
             results.append((hashstr, algorithm, word, ))
-            print json.dumps(results)
+            print(json.dumps(results))
         self.wfile.write(json.dumps(results))
         return
 
@@ -150,6 +150,6 @@ def startServer(location, address='0.0.0.0', port=8080):
     '''
     global LOCATION
     server = ThreadedHTTPServer((address, port), Handler)
-    print 'Starting server, use <Ctrl-C> to stop'
+    print('Starting server, use <Ctrl-C> to stop')
     LOCATION = location
     server.serve_forever()

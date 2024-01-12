@@ -3,17 +3,19 @@ import sys
 import hashlib
 import argparse
 import multiprocessing
+import queue
 import re
 import struct
 import binascii
 import gzip
 import time
-import Queue
 import signal
 import resource
 # Import our large binary file sorting library
 from binarydb import *
 import webserver
+
+# pylint: disable=missing-function-docstring
 
 WORDLIST_NAME = 'wordlist{:04x}'
 HASHFILE_NAME = '{:s}{:02x}'
@@ -39,29 +41,29 @@ INDEXMASK = ((1<<INDEXBITS)-1)
 MAXINDEX = (2**WIDTHBITS)
 RECORDSIZE = HASHLEN+4
 
-def algoSha1(word):
-    return hashlib.sha1(word).digest()
-def algoSha256(word):
-    return hashlib.sha256(word).digest()
-def algoSha384(word):
-    return hashlib.sha384(word).digest()
-def algoSha512(word):
-    return hashlib.sha512(word).digest()
-def algoMd5(word):
-    return hashlib.md5(word).digest()
-def algoNTLM(word):
+def algoSha1(word:str) -> bytes:
+    return hashlib.sha1(word.encode('utf8') if isinstance(word, str) else word).digest()
+def algoSha256(word:str) -> bytes:
+    return hashlib.sha256(word.encode('utf8')).digest()
+def algoSha384(word:str) -> bytes:
+    return hashlib.sha384(word.encode('utf8')).digest()
+def algoSha512(word:str) -> bytes:
+    return hashlib.sha512(word.encode('utf8')).digest()
+def algoMd5(word:str) -> bytes:
+    return hashlib.md5(word.encode('utf8')).digest()
+def algoNTLM(word:str) -> bytes:
     try: return hashlib.new('md4', word.encode('utf-16le')).digest()
     except UnicodeDecodeError: return hashlib.new('md4', word.decode('utf-8', 'ignore').encode('utf-16le')).digest()
-def algoMySQL41(word):
-    return hashlib.sha1(hashlib.sha1(word).digest()).digest()
-def algoMd5Md5Hex(word):
-    return hashlib.md5(hashlib.md5(word).hexdigest()).digest()
+def algoMySQL41(word:str) -> bytes:
+    return hashlib.sha1(hashlib.sha1(word.encode('utf8')).digest()).digest()
+def algoMd5Md5Hex(word:str) -> bytes:
+    return hashlib.md5(hashlib.md5(word.encode('utf8')).hexdigest().encode('utf8')).digest()
+
 ALGORITHM = {'sha1' : algoSha1,
              'sha256' : algoSha256,
              'sha384' : algoSha384,
              'sha512' : algoSha512,
              'md5' : algoMd5,
-             'ntlm' : algoNTLM,
              'mysql41' : algoMySQL41,
              'md5md5hex' : algoMd5Md5Hex}
 EMPTYHASH = {a:ALGORITHM[a]('') for a in ALGORITHM}
@@ -121,7 +123,7 @@ def getWordlist(location, index, openmode=None, bufsize=-1, compress=False):
     return open(filepath, openmode, bufsize)
 
 def getWordlists(location, openmode=None):
-    for width in xrange(1, maxWordsize(location)):
+    for width in range(1, maxWordsize(location)):
         yield getWordlist(location, width, openmode=openmode)
 
 def getHashfile(location, algorithm, index, openmode=None, bufsize=-1):
@@ -143,13 +145,13 @@ def getHashFiles(location, openmode=None, bufsize=-1):
     given location
     '''
     for algo in getAlgorithms(location):
-        for index in xrange(256):
+        for index in range(256):
             yield getHashfile(location, algo, index, openmode=openmode, bufsize=bufsize)
 
 def getUnsortedFiles(location):
     global HASHFILE_NAME, ALGORITHM
     for algorithm in sorted(ALGORITHM.keys()):
-        for index in xrange(256):
+        for index in range(256):
             basefilepath = os.path.join(location, algorithm, HASHFILE_NAME.format(algorithm, index))
             unsortedpath = basefilepath + UNSORTED_APPEND
             if os.path.isfile(unsortedpath):
@@ -161,7 +163,7 @@ def getUnsortedFiles(location):
 def markAlgorithmUnsorted(location, algorithm):
     global HASHFILE_NAME
     count = 0
-    for index in xrange(256):
+    for index in range(256):
         basefilepath = os.path.join(location, algorithm, HASHFILE_NAME.format(algorithm, index))
         unsortedpath = basefilepath + UNSORTED_APPEND
         if os.path.isfile(basefilepath):
@@ -184,7 +186,7 @@ def hasUnsortedTables(location):
 
 def markAlgorithmsAppended(location):
     for algorithm in getAlgorithms(location):
-        for index in xrange(256):
+        for index in range(256):
             basefilepath = os.path.join(location, algorithm, HASHFILE_NAME.format(algorithm, index))
             appendedpath = basefilepath + APPENDED_APPEND
             if os.path.isfile(basefilepath):
@@ -197,7 +199,7 @@ def readWordlists(wordlists, maxsize=None, ignore=None, wordfilter=None, analysi
     stats = {'total':0, 'ignored':0, 'filtered':0, 'toobig':0, 'maxlength':0, 'lengths':{}, 'output':0}
     spinner, state = '|/-\\', 0
     for wordlist in wordlists:
-        fh = open(wordlist, 'rU') if wordlist != '-' else sys.stdin
+        fh = open(wordlist, 'rt') if wordlist != '-' else sys.stdin
         for line in fh:
             line = line.strip()
             if count != None and stats['output'] >= count:
@@ -225,7 +227,7 @@ def readWordlists(wordlists, maxsize=None, ignore=None, wordfilter=None, analysi
                 continue
             # Update our maximum size
             if len(line) > stats['maxlength']:
-                stats['maxlength'] = line
+                stats['maxlength'] = len(line)
             # Yield if not doing analysis wanted
             stats['output'] += 1
             if stats['output'] % 10000 == 0:
@@ -325,7 +327,7 @@ def checkFileHandles(maxsize):
         print('[!] I *strongly* suggest increasing the number by running')
         print('[!] \tulimit -n {:d}'.format( suggested ))
         print('[!] Then running the program again')
-        if raw_input("Continue anyway? (y/n):") != 'y':
+        if input("Continue anyway? (y/n):") != 'y':
             sys.exit(0)
     # We always return the soft file handle limit
     return soft
@@ -444,7 +446,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
         # Build out initial indexes table
         file_indexes = {}
         if maxWordsize(location) != None:
-            for width in xrange(1, maxWordsize(location)):
+            for width in range(1, maxWordsize(location)):
                 wordlist = getWordlist(location, width)
                 file_indexes[width] = (os.path.getsize(wordlist) / width) if os.path.isfile(wordlist) else 0
 
@@ -467,7 +469,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
                     cachedHandles['wordlists'][width] = getWordlist(args.location, width, openmode='ab+')
                     usedHandles += 1
                 if width in cachedHandles['wordlists']:
-                    cachedHandles['wordlists'][width].write(word)
+                    cachedHandles['wordlists'][width].write(word.encode('utf8'))
                 else:
                     # Fall back to the slower technique
                     with getWordlist(args.location, width, openmode='ab+', bufsize=0) as fh:
@@ -483,7 +485,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
                 # n bits | 32-n bits
                 # width    index
                 offsetval = ((width&WIDTHMASK) << INDEXBITS) | (index & INDEXMASK)
-                hashindex = ord(hashbytes[0])
+                hashindex = hashbytes[0]
                 hashData = hashbytes[:HASHLEN] + struct.pack('>I', offsetval)
 
                 if (algorithm, hashindex, ) not in cachedHandles['hashes'] and usedHandles < maxHandles:
@@ -514,7 +516,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
                 break
             try:
                 word = wordqueue.get(True, 1)
-            except Queue.Empty:
+            except queue.Empty:
                 time.sleep(0.5)
                 continue
             index = None
@@ -556,7 +558,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
     writer.start()
 
     workers = []
-    for i in xrange(threads):
+    for i in range(threads):
         p = multiprocessing.Process(target=hashWorker, args=(wordqueue, writequeue, complete,))
         p.daemon = True
         p.start()
@@ -587,7 +589,7 @@ def importwords(location, wordlists=None, maxsize=None, ignore=None, wordfilter=
     finally:
         print('\r[+] Killing workers')
         complete.set()
-        for i in xrange(threads):
+        for i in range(threads):
             workers[i].join()
         writer.join()
 
@@ -608,7 +610,7 @@ def lookup(location, hashbytes, available):
                 yield algorithm
     maxsize = maxWordsize(location)
     for algorithm in detectAlgo(hashbytes, available):
-        hashfile = getHashfile(location, algorithm, ord(hashbytes[0]))
+        hashfile = getHashfile(location, algorithm, hashbytes[0])
         assert(os.path.isfile(hashfile))
         if hashfile[-1] in (UNSORTED_APPEND, APPENDED_APPEND,):
             sys.stderr.write('[!] Unsorted database! Unable to crack {:s}\n'.format(algorithm))
@@ -721,7 +723,7 @@ def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
         queue = multiprocessing.Queue(1000)
         complete = multiprocessing.Event()
         workers = []
-        for i in xrange(threads):
+        for i in range(threads):
             p = multiprocessing.Process(target=worker, args=(queue, complete, available_algorithms))
             p.daemon = True
             p.start()
@@ -738,7 +740,7 @@ def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
             return
         finally:
             complete.set()
-            for i in xrange(threads):
+            for i in range(threads):
                 workers[i].join()
 
 def export(location):
@@ -809,7 +811,7 @@ def importnew(location, wordlists, maxsize=None, ignore=None, wordfilter=None, s
         writelock = multiprocessing.Lock()
         complete = multiprocessing.Event()
         workers = []
-        for i in xrange(threads):
+        for i in range(threads):
             p = multiprocessing.Process(target=worker, args=(queue, complete, checkalgorithm, wfh, writelock))
             p.daemon = True
             p.start()
@@ -823,7 +825,7 @@ def importnew(location, wordlists, maxsize=None, ignore=None, wordfilter=None, s
             return
         finally:
             complete.set()
-            for i in xrange(threads):
+            for i in range(threads):
                 workers[i].join()
         wfh.close()
 
@@ -842,11 +844,11 @@ if __name__ == '__main__':
         if algorithms is None:
             algorithms = ['sha1', 'sha256', 'md5', 'ntlm', ]
         elif 'all' in algorithms:
-            algorithms = ALGORITHM.keys()[:]
+            algorithms = list(ALGORITHM.keys())[:]
         else:
             algorithms = algorithms.split(',')
         # Validate algorithm list
-        invalid = [a for a in algorithms if a not in ALGORITHM.keys()]
+        invalid = [a for a in algorithms if a not in list(ALGORITHM.keys())]
         if len( invalid ) > 0:
             print('[!] ERROR: Unknown algorithm(s): {:s}'.format(','.join(invalid)))
             sys.exit(-1)
@@ -879,6 +881,8 @@ if __name__ == '__main__':
         args = parser.parse_args(sys.argv[2:])
         # Unpack algorithm list
         args.algorithm = parseAlgorithms(args.algorithm)
+        if not os.path.isdir(args.location):
+            os.mkdir(args.location)
         importwords(args.location, args.wordlist, args.max, args.ignore, args.filter, count=args.count, threads=args.threads)
     elif args.action == 'sort':
         parser = argparse.ArgumentParser(description='Sort. Sort the database files ready for lookup')
@@ -906,7 +910,7 @@ if __name__ == '__main__':
     elif args.action == 'add':
         parser = argparse.ArgumentParser(description='Add. Add an additional algorithm to the database')
         parser.add_argument('location', help='Location of the cracking database')
-        parser.add_argument('-a', '--algorithm', nargs='+', choices=ALGORITHM.keys()+['all', ], help='Comma separated algorithms to generate')
+        parser.add_argument('-a', '--algorithm', nargs='+', choices=list(ALGORITHM.keys())+['all', ], help='Comma separated algorithms to generate')
         parser.add_argument('-t', '--threads', default=multiprocessing.cpu_count(), type=int, help='Number of processing threads to use')
         args = parser.parse_args(sys.argv[2:])
         # Unpack algorithm list

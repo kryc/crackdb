@@ -1,3 +1,4 @@
+import io
 import os
 import mmap
 import time
@@ -7,7 +8,7 @@ import psutil
 def strcmp(word1, word2):
     n = min(len(word1), len(word2))
     # Compare the bytes in each word
-    for i in xrange(n):
+    for i in range(n):
         o1 = word1[i]
         o2 = word2[i]
         if o1 == o2:
@@ -41,7 +42,7 @@ def sortFileBubble(mm, records, width, comparefn, threads=None):
         if changed is False:
             break
         changed = False
-        for i in xrange(0, records-1):
+        for i in range(0, records-1):
             entry1 = mm[i*width : i*width+width]
             entry2 = mm[(i+1)*width : (i+1)*width+width]
             comparison = comparefn(entry1, entry2)
@@ -72,7 +73,7 @@ def sortFileQuicksort(mm, records, width, comparefn, threads=None):
     '''
     def partition(mm, begin, end):
         pivot = begin
-        for i in xrange(begin+1, end+1):
+        for i in range(begin+1, end+1):
             entry1 = mm[i*width : i*width+width]
             entry2 = mm[begin*width: begin*width+width]
             comparison = comparefn(entry1, entry2)
@@ -140,10 +141,10 @@ def sortFileQuicksort(mm, records, width, comparefn, threads=None):
     else:
         workers = []
         queue = multiprocessing.Queue()
-        working = [multiprocessing.Event() for i in xrange(threads)]
+        working = [multiprocessing.Event() for i in range(threads)]
         complete = multiprocessing.Event()
         queue.put((0, records-1,))
-        for i in xrange(threads):
+        for i in range(threads):
             p = multiprocessing.Process(target=worker, args=(i, queue, complete, working[i]))
             p.daemon = True
             p.start()
@@ -151,12 +152,12 @@ def sortFileQuicksort(mm, records, width, comparefn, threads=None):
         while not complete.is_set():
             time.sleep(3)
             processing = False
-            for i in xrange(threads):
+            for i in range(threads):
                 if working[i].is_set():
                     processing = True
             if not processing:
                 complete.set()
-        for i in xrange(threads):
+        for i in range(threads):
             workers[i].join()
     return True
 
@@ -182,7 +183,7 @@ def isSorted(handle, width, comparefn):
     fh.seek(0, os.SEEK_SET)
     # Read the first record
     record1 = fh.read(width)
-    for index in xrange(1, records):
+    for index in range(1, records):
         record2 = fh.read(width)
         if comparefn(record1, record2) > 0:
             if isinstance(handle, str):
@@ -210,7 +211,7 @@ def iterateRecords(handle, width):
         raise Exception('Database file does not appear to be valid')
     records = filesize / width
     fh.seek(0, os.SEEK_SET)
-    for index in xrange(records):
+    for index in range(records):
         yield fh.read(width)
     if isinstance(handle, str):
         fh.close()
@@ -244,7 +245,7 @@ def sortFile(handle, width, comparefn, threads=None, algorithm=None, rename=None
         # Only one record so return early
         if filesize == width:
             return True
-        records = filesize / width
+        records = int(filesize / width)
         # We will be quite aggresive and use 75% of available memory.
         # We need to be careful that we dont push the system to page us out
         # in which case using a memory mapped file would be better suited
@@ -273,7 +274,7 @@ def sortFile(handle, width, comparefn, threads=None, algorithm=None, rename=None
             closeafter = True
     # Note that we dont use elif as we may drop through to this
     # if we dont have enough memory to load the table into
-    if isinstance(handle, file):
+    if isinstance(handle, io.FileIO):
         # Get the number of records
         handle.seek(0, os.SEEK_END)
         file_end = handle.tell()
@@ -307,7 +308,7 @@ def binarySearch(handle, value, width=None, mm=None, entries=None):
         if width is None:
             width = len(value)
         if right >= left:
-            mid = left + (right-left)/2
+            mid = int(left + (right-left)/2)
             n = mm[mid*width:mid*width+width]
             h = n[:len(value)]
             comparison = memcmp(h, value)
@@ -315,7 +316,7 @@ def binarySearch(handle, value, width=None, mm=None, entries=None):
                 assert(len(h) == len(value))
                 results = [n,]
                 # Found the first result, new seek each side to find other matches
-                for i in xrange(mid-1, -1, -1):
+                for i in range(mid-1, -1, -1):
                     n = mm[i*width:i*width+width]
                     h = n[:len(value)]
                     assert(len(h) == len(value))
@@ -323,7 +324,7 @@ def binarySearch(handle, value, width=None, mm=None, entries=None):
                         results.append(n)
                     else:
                         break
-                for i in xrange(mid+1, entries):
+                for i in range(mid+1, entries):
                     n = mm[i*width:i*width+width]
                     h = n[:len(value)]
                     assert(len(h) == len(value))
@@ -347,7 +348,7 @@ def binarySearch(handle, value, width=None, mm=None, entries=None):
         opened = True
     if entries is None:
         handle.seek(0, os.SEEK_END)
-        entries = handle.tell() / (width if width != None else len(value))
+        entries = int(handle.tell() / (width if width != None else len(value)))
         handle.seek(0)
     result = _search(mm, 0, entries-1, value, width)
     if opened:
