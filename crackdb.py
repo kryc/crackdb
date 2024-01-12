@@ -94,6 +94,16 @@ def maxWordsize(location, cache=True):
     CACHED_MAXSIZE = int(m.group(1), 16)
     return CACHED_MAXSIZE
 
+def isWordlist(location, index, compress=False):
+    global WORDLIST_NAME
+    filename = WORDLIST_NAME.format(index)
+    filepath = os.path.join(location, 'wordlists', filename)
+    if compress and os.path.isfile('{:s}.gz'.format(filepath)):
+        return True
+    elif os.path.isfile(filepath):
+        return True
+    return False
+
 def getWordlist(location, index, openmode=None, bufsize=-1, compress=False):
     global WORDLIST_NAME
     filename = WORDLIST_NAME.format(index)
@@ -102,6 +112,8 @@ def getWordlist(location, index, openmode=None, bufsize=-1, compress=False):
         filepath = '{:s}.gz'.format(filepath)
     if openmode is None:
         return filepath
+    if 'r' in openmode and not os.path.isfile(filepath):
+        return None
     # Handle gzip compressed files
     # This will default to level 9
     if filepath.endswith('.gz'):
@@ -613,16 +625,21 @@ def lookup(location, hashbytes, available):
                 offset = index & INDEXMASK
                 # Because we may need to wrap, we keep looking until we find a match in the wordlists
                 while width < maxsize:
-                    with getWordlist(location, width, 'rb') as fh:
-                        # The offset will wrap for large wordlists so we need to keep seeking and checking
-                        fh.seek(width * offset, os.SEEK_CUR)
-                        while True:
-                            word = fh.read(width)
-                            if word == '' or word is None:
-                                break
-                            if ALGORITHM[algorithm](word) == hashbytes:
-                                return algorithm, word
-                            fh.seek(width * INDEXMASK, os.SEEK_CUR)
+                    if isWordlist(location, width):
+                        with getWordlist(location, width, 'rb') as fh:
+                            # The offset will wrap for large wordlists so we need to keep seeking and checking
+                            try:
+                                fh.seek(width * offset, os.SEEK_CUR)
+                                while True:
+                                    word = fh.read(width)
+                                    if word == '' or word is None:
+                                        break
+                                    if ALGORITHM[algorithm](word) == hashbytes:
+                                        return algorithm, word
+                                    fh.seek(width * INDEXMASK, os.SEEK_CUR)
+                            except IOError:
+                                pass
+
                     # We didnt find a matching word so we increase the wordsize
                     width += MAXINDEX
     return None
