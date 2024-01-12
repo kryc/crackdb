@@ -61,7 +61,7 @@ ALGORITHM = {'sha1' : algoSha1,
              'sha384' : algoSha384,
              'sha512' : algoSha512,
              'md5' : algoMd5,
-             'ntlm' : algoNTLM,
+#             'ntlm' : algoNTLM,
              'mysql41' : algoMySQL41,
              'md5md5hex' : algoMd5Md5Hex}
 EMPTYHASH = {a:ALGORITHM[a]('') for a in ALGORITHM}
@@ -656,22 +656,27 @@ def storeUncrackable(location, hashstr):
         with open(os.path.join(location, 'uncrackable.txt'), 'at') as fh:
             fh.write('{:s}\n'.format(hashstr))
 
-def crack(location, hashes, threads=None, uncrackable=None, ignore=False):
+def crack(location, hashes, output=None, threads=None, uncrackable=None, ignore=False):
     '''
     Main entry point to the crack command line option.
     Takes the location of the database and an iterable containing
     hash strings or file paths. If an entry contains a file path it
     is opened and handled as a big list of hashes
     '''
+    if output is not None:
+        fh = open(output, 'wt')
     def display(hashstr, word, matches='NA', misses='NA;'):
         # We need to aquire the print lock in case we are multithreaded
         if word is not None or (word is None and not ignore):
-            word = word if word is not None else '***UNKNOWN***'
-            with PRINT_LOCK:
-                if args.debug:
-                    print('{:s} {:s} [matches:{:} misses:{:}]'.format(hashstr, word, matches, misses))
-                else:
-                    print('{:s} {:s}'.format(hashstr, word if word != None else '!!! HASH NOT FOUND !!!'))
+            if args.output:
+                fh.write('{:s} {:s}\n'.format(hashstr, word))
+            else:
+                word = word if word is not None else '***UNKNOWN***'
+                with PRINT_LOCK:
+                    if args.debug:
+                        print('{:s} {:s} [matches:{:} misses:{:}]'.format(hashstr, word, matches, misses))
+                    else:
+                        print('{:s} {:s}'.format(hashstr, word if word != None else '!!! HASH NOT FOUND !!!'))
         # If the password has not successfully been cracked, we add
         # it to the 'uncrackable' file in the database. This seems
         # like an odd place for this but its common code for threaded
@@ -896,13 +901,14 @@ if __name__ == '__main__':
         parser = argparse.ArgumentParser(description='Crack. Crack password hashes')
         parser.add_argument('location', help='Location of the cracking database')
         parser.add_argument('hash', nargs='+', help='Cracking target. Could be a hash or a file path')
+        parser.add_argument('-o', '--output', help='Output path')
         parser.add_argument('-t', '--threads', type=int, help='Number of processing threads to use')
         parser.add_argument('-d', '--debug', action='store_true', help='Output debug information')
         parser.add_argument('-a', '--archive', action='store_true', help='Archive uncracked hashes')
         parser.add_argument('-i', '--ignore', action='store_true', help='Ignore uncrackable')
         args = parser.parse_args(sys.argv[2:])
         uncrackable = storeUncrackable if args.archive else None
-        crack(args.location, args.hash, threads=args.threads, uncrackable=uncrackable, ignore=args.ignore)
+        crack(args.location, args.hash, output=args.output, threads=args.threads, uncrackable=uncrackable, ignore=args.ignore)
     elif args.action == 'add':
         parser = argparse.ArgumentParser(description='Add. Add an additional algorithm to the database')
         parser.add_argument('location', help='Location of the cracking database')
