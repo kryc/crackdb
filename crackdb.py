@@ -334,10 +334,10 @@ def sortUnsortedFileWorker(filename):
     # We use force mmap because there will be multiple
     # files being sorted at once meaning we will likely
     # require a lot of ram. This prevents us paging
-    return sortFile(filename, RECORDSIZE, compareRecords, threads=1, algorithm='quick', rename=filename[:-1], forcemmap=True)
+    return sortFile(filename, RECORDSIZE, compareRecords, threads=1, algorithm='quick', rename=filename[:-1])
 
 def sortAppendedFileWorker(filename):
-    return sortFile(filename, RECORDSIZE, compareRecords, threads=1, algorithm='bubble', rename=filename[:-1], forcemmap=True)
+    return sortFile(filename, RECORDSIZE, compareRecords, threads=1, algorithm='bubble', rename=filename[:-1])
 
 def sortDatabase(location, threads=None, count=None):
     '''
@@ -350,11 +350,9 @@ def sortDatabase(location, threads=None, count=None):
     unsortedFiles = [f for f in getUnsortedFiles(location) if f[-1] == UNSORTED_APPEND]
     appendedFiles = [f for f in getUnsortedFiles(location) if f[-1] == APPENDED_APPEND]
     if (len(unsortedFiles) > 1 or len(appendedFiles) > 1) and threads >= 2:
-        dropout = multiprocessing.Event()
-        with DelayedKeyboardInterrupt(dropout):
-            p = multiprocessing.Pool(threads)
-            p.map(sortUnsortedFileWorker, unsortedFiles)
-            p.map(sortAppendedFileWorker, appendedFiles)
+        p = multiprocessing.Pool(threads)
+        p.map(sortUnsortedFileWorker, unsortedFiles)
+        p.map(sortAppendedFileWorker, appendedFiles)
 
     # Now we do the linear sorting techniques as a catch-all
     for filename in getUnsortedFiles(location):
