@@ -661,35 +661,41 @@ def crack(location, hashes, output=None, threads=None, uncrackable=None, ignore=
     hash strings or file paths. If an entry contains a file path it
     is opened and handled as a big list of hashes
     '''
-    if output is not None:
-        fh = open(output, 'wt')
     def display(hashstr, word, matches='NA', misses='NA;'):
-        # We need to aquire the print lock in case we are multithreaded
-        if word is not None or (word is None and not ignore):
-            if args.output:
-                fh.write('{:s} {:s}\n'.format(hashstr, word))
-            else:
-                word = word if word is not None else '***UNKNOWN***'
-                with PRINT_LOCK:
-                    if args.debug:
-                        print('{:s} {:s} [matches:{:} misses:{:}]'.format(hashstr, word, matches, misses))
-                    else:
-                        print('{:s} {:s}'.format(hashstr, word if word != None else '!!! HASH NOT FOUND !!!'))
         # If the password has not successfully been cracked, we add
         # it to the 'uncrackable' file in the database. This seems
         # like an odd place for this but its common code for threaded
         # and unthreaded versions
-        if word is None and uncrackable != None:
+        if word is None and uncrackable is not None:
             uncrackable(location, hashstr)
+
+        if word is None and ignore:
+            return
+
+        # We need to aquire the print lock in case we are multithreaded
+        with PRINT_LOCK:
+            if args.output:
+                fh.write('{:s} {:s}\n'.format(hashstr, word))
+            else:
+                word = word if word is not None else '***UNKNOWN***'
+                if args.debug:
+                    print('{:s} {:s} [matches:{:} misses:{:}]'.format(hashstr, word, matches, misses))
+                else:
+                    print('{:s} {:s}'.format(hashstr, word if word != None else '!!! HASH NOT FOUND !!!'))
     def parseHashes(hashes):
+        exp = re.compile(r'^((?:[0-9A-Fa-f]{2})+)')
         for item in hashes:
             if os.path.isfile(item):
                 with open(item, 'r') as fh:
                     for line in fh:
-                        yield line.strip() if ':' not in line else line.split(':')[-1].strip()
+                        m = re.search(exp, line)
+			if m is not None:
+                            yield m.group(1)
             elif item == '-':
                 for line in sys.stdin:
-                    yield line.strip() if ':' not in line else line.split(':')[-1].strip()
+                    m = re.search(exp, line)
+                    if m is not None:
+                        yield m.group(1)
             else:
                 yield item if ':' not in item else item.split(':')[-1]
     def worker(queue, complete, available_algorithms):
@@ -704,6 +710,20 @@ def crack(location, hashes, output=None, threads=None, uncrackable=None, ignore=
             algorithm, word = result if result is not None else (None, None,)
             display(hashstr, word)
 
+    resume = []
+    resuming = False
+    if output is not None:
+        if os.path.isfile(output):
+            # Store the last 100 cracked hashes
+            resuming = True
+            for hashstr in parseHashes([output,]):
+                if len(resume) == 100:
+                    resume.pop(0)
+                hashbytes = binascii.unhexlify(hashstr)
+                resume.append(hashbytes)
+            fh = open(output, 'at')
+        else:
+            fh = open(output, 'wt')
 
     available_algorithms = getAlgorithms(location)
     if threads in (None, 0, 1,):
@@ -713,6 +733,15 @@ def crack(location, hashes, output=None, threads=None, uncrackable=None, ignore=
                 hashbytes = binascii.unhexlify(hashstr)
             except TypeError:
                 display(hashstr, None)
+            if resuming:
+                if hashbytes not in resume:
+                    continue
+                else:
+                    resuming = False
+                    continue
+            if len(resume) > 0 and hashbytes in resume:
+                resume.remove(hashbytes)
+                continue
             if hashbytes in EMPTYHASH:
                 result = (EMPTYHASH[hashbytes], '',)
             else:
@@ -735,6 +764,15 @@ def crack(location, hashes, output=None, threads=None, uncrackable=None, ignore=
                     hashbytes = binascii.unhexlify(hashstr)
                 except TypeError:
                     display(hashstr, None)
+                #if resuming:
+                #   if hashbytes not in resume:
+                #        continue
+                #   else:
+                #        resuming = False
+                #        continue
+                #if len(resume) > 0 and hashbytes in resume:
+                #    resume.remove(hashbytes)
+                #    continue
                 queue.put((hashstr, hashbytes,))
         except KeyboardInterrupt:
             print('\r[+] Interrupted. During crack')
